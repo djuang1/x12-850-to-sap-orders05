@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:x12="http://www.mulesoft.org/schema/mule/x12"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd 
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/x12 http://www.mulesoft.org/schema/mule/x12/current/mule-x12.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+	<x12:config name="X12_EDI_Config" doc:name="X12 EDI Config" doc:id="1c468770-a0fb-4c3f-acec-a985cf3790b6" requireUniqueInterchanges="false">
+		<x12:schemas >
+			<x12:schema value="/x12/004010/850.esl" />
+		</x12:schemas>
+	</x12:config>
+	<configuration-properties doc:name="Configuration properties" doc:id="09d34b9e-98cd-43d7-8cbb-fa7c8523baf8" file="mule-properties.yaml" />
+	<validation:config name="Validation_Config" doc:name="Validation Config" doc:id="2eddbedd-bfc5-4b3f-a007-593300afe1a7" />
+	<file:config name="File_Config" doc:name="File Config" doc:id="f05ffdb0-be24-4238-860e-15fc49bf171d" />
+	<flow name="x12-850-to-sap-orders05Flow" doc:id="4ea1f147-beb3-41bc-bd98-8b2c0d46a623" >
+		<file:listener doc:name="On New or Updated File" doc:id="d2d92df4-36a7-46f1-b72e-637e3aba9650" directory="${file.projectfolder}/src/main/resources/in" moveToDirectory="${file.projectfolder}/src/main/resources/out">
+			<scheduling-strategy >
+				<fixed-frequency />
+			</scheduling-strategy>
+		</file:listener>
+		<logger level="INFO" doc:name="Logger" doc:id="ec4c482d-9095-4aaf-bc81-ca3beb2425f4" />
+		<x12:read doc:name="Read 850 Message" doc:id="13b373a9-914b-4578-a6e7-873ea9000bd1" config-ref="X12_EDI_Config"/>
+
+		<ee:transform doc:name="Map X12/850 to IDOC/ORDERS" doc:id="218f5444-6064-40cb-8f64-3d810ea983f7">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml skipNullOn="everywhere"
+---
+IDOCS:{(
+payload.TransactionSets.v004010."850" map (item,index) -> {
+	ORDERS05: if((item.Heading."310_N1_Loop" == null) or ((item.Interchange.ISA06 != "8479253040SE") and ((item.Heading."3100_N1_Loop"."3100_N1".N104 == null) and (contains(["ST","BT","OB","BY","BS"],item.Heading."3100_N1_Loop"."3100_N1".N101))))) Mule::lookup('FailedTranslation',item.Heading."020_BEG".BEG03) else {
+		IDOC: {
+			EDI_DC40: {
+				STDMES: "",
+				SNDPRN: if(item.Interchange.ISA06 == "802068825") item.Interchange.ISA06 else "",
+				REFMES: item.Heading."020_BEG".BEG03 as String
+			},
+			E1EDK01: {
+				ACTION: "000",
+				CURCY: if(item.Heading."040_CUR".CUR02?) item.Heading."040_CUR".CUR02 else "USD",
+				BELNR: item.Heading."020_BEG".BEG03,
+				ZZE1EDK01: {
+					Z_DIRECT_DLVRY: if( item.Heading."020_BEG".BEG02 == "DS" or item.Heading."020_BEG".BEG02 == "DR") "01" else "",
+					ZSDABW: if(item.Heading."080_FOB".FOB01 == "TP") "TRD" else if (item.Heading."080_FOB".FOB01 == "CC") "COL" else ""
+				}
+			},
+			E1EDK14: {
+				QUALF: "019",
+				ORGID: if(item.Interchange.ISA06 == "802068825") "ZVMI" else "ZEDI"
+			},
+			E1EDK03: if(item.Heading."150_DTM".DTM01 == "002"){
+				IDDAT: "002",
+				DATUM: item.Heading."150_DTM".DTM02 as String
+			} else null,
+			E1EDKA1: if(item.Heading."310_N1_Loop"?){
+				PARVW: "AG"
+			} else null,
+			E1EDKA1: if( contains(["DS","DR"],item.Heading."020_BEG".BEG02) and (item.Interchange.ISA06 != "8479253040SE") and (item.Heading."310_N1_Loop"."310_N1".N104?) and (item.Heading."310_N1_Loop"."310_N1".N101 == "ST") or (contains(["DS","DR"],item.Heading."020_BEG".BEG02) and (item.Interchange.ISA06 == "8479253040SE") and (item.Heading."310_N1_Loop"."310_N1".N101 == "ST")) or (contains(["DS","DR"],item.Heading."020_BEG".BEG02) and contains(["CT","CR","Q1","ZZ"],item.Heading."050_REF".REF01) and ((sizeOf(item.Heading."050_REF"[0].REF02 default "") >=8) and (sizeOf(item.Heading."050_REF"[0].REF02 default "")<=13) and isInteger(item.Heading."050_REF"[0].REF02 default "")))
+			){
+				PARVW: "WE",
+				LIFNR: item.Heading."050_REF".REF02,
+				NAME1: item.Heading."310_N1_Loop"."310_N1".N102,
+				NAME2: item.Heading."310_N1_Loop"."320_N2".N201,
+				STRAS: item.Heading."310_N1_Loop"."330_N3".N301,
+				STRS2: item.Heading."310_N1_Loop"."330_N3".N302,
+				ORTO1: item.Heading."310_N1_Loop"."340_N4".N401,
+				REGIO: item.Heading."310_N1_Loop"."340_N4".N402,
+				PSTLZ: item.Heading."310_N1_Loop"."340_N4".N403,
+				LAND1: if(item.Heading."310_N1_Loop"."340_N4".N404?) item.Heading."310_N1_Loop"."340_N4".N404 else "US"
+			} else if (contains(["TP","CC"],item.Heading."080_FOB".FOB01)){
+				PARVW: "Z7",
+				PARTN: "2500033167",
+				NAME1: item.Heading."310_N1_Loop"."310_N1".N102,
+				NAME2: item.Heading."310_N1_Loop"."320_N2".N201,
+				NAME4: item.Heading."050_REF".REF02,
+				STRAS: item.Heading."310_N1_Loop"."330_N3".N301,
+				STRS2: item.Heading."310_N1_Loop"."330_N3".N302,
+				ORTO1: item.Heading."310_N1_Loop"."340_N4".N401,
+				REGIO: item.Heading."310_N1_Loop"."340_N4".N402,
+				PSTLZ: item.Heading."310_N1_Loop"."340_N4".N403,
+				LAND1: item.Heading."310_N1_Loop"."340_N4".N404
+			}
+			else null,
+			E1EDKA1: {
+				PARVW: "LF",
+				PARTN: "SCHNE_EVR",
+				LIFNR: "SCHNE_EVR"
+			},
+			E1EDK02: {
+				QUALF: "001",
+				BELNR: item.Heading."020_BEG".BEG03,
+				DATUM: item.Heading."020_BEG".BEG05
+			},
+			E1EDKT1: {
+				TDID: "ZEDI",
+				TSSPRAS: "EN"
+			},
+			E1EDP01: item.Detail."010_PO1_Loop" map(po_item,value) -> {
+				POSEX: po_item.Detail."010_PO1_Loop"."010_PO1".PO101,
+				MENGE: po_item."010_PO1".PO102 as String,
+				MENEE: po_item."010_PO1".PO103,
+				PEINH: po_item."010_PO1".PO104 as String,
+				ZE1EDP01_NB4DATE: {
+					YNB4D: if(po_item."210_DTM".DTM01=="037") "X" else null,
+					ZEXCARID: po_item."250_TD5".TD503
+				},
+				E1EDP20: {
+					EDATU: if(po_item."210_DTM".DTM06=="002") po_item."210_DTM".DTM06 else null
+				},
+				E1EDPT1: {
+					TDID: "Z525"
+				}
+			}
+		}
+	}
+}
+)}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<foreach doc:name="For Each IDOC" doc:id="41cde11b-f0fe-409a-afef-698098847691" collection="payload.IDOCS">
+			<file:write doc:name="Write XML IDOC" doc:id="17711438-33a3-4fc1-9db6-b0366dce6b42" path="#[p('file.projectfolder') ++ &quot;/src/main/resources/out/&quot; ++ now() ++ &quot;.xml&quot;]" config-ref="File_Config">
+		</file:write>
+		</foreach>
+	</flow>
+</mule>
